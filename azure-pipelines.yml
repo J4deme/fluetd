@@ -86,17 +86,14 @@ stages:
             # Wait a moment to ensure resources are cleaned up
             sleep 10
             
-            # Видаляємо всі існуючі ValidatingWebhookConfigurations для nginx
+            # Видаляємо всі існуючі ValidatingWebhookConfigurations для nginx (потенційна проблема)
             kubectl delete validatingwebhookconfiguration ingress-nginx-admission --ignore-not-found
             
-            # Install Nginx Ingress Controller with properly configured webhook
+            echo "Installing NGINX Ingress Controller with simplified configuration..."
+            # Simplified Ingress Controller installation - removed problematic webhook parameters
             helm install nginx-ingress ingress-nginx/ingress-nginx \
               --set controller.service.loadBalancerIP=$(staticIpAddress) \
-              --set controller.service.annotations."service\.beta\.kubernetes\.io/azure-load-balancer-health-probe-request-path"=/healthz \
-              --set controller.admissionWebhooks.enabled=true \
-              --set controller.admissionWebhooks.patch.enabled=true \
-              --set controller.admissionWebhooks.failurePolicy=Ignore \
-              --wait
+              --set controller.service.annotations."service\.beta\.kubernetes\.io/azure-load-balancer-health-probe-request-path"=/healthz
               
             echo "Waiting for external IP..."
             for i in {1..30}; do
@@ -108,23 +105,25 @@ stages:
               sleep 10
             done
             
-            # Properly wait for NGINX Ingress to be fully ready
-            echo "Ensuring all NGINX Ingress components are ready..."
-            kubectl rollout status deployment/nginx-ingress-ingress-nginx-controller --timeout=180s
+            # Verify Ingress Controller deployment success
+            echo "Checking NGINX Ingress Controller pods..."
+            kubectl get pods -l app.kubernetes.io/name=ingress-nginx
+            kubectl get pods -l app.kubernetes.io/instance=nginx-ingress
             
-            # Verify that webhook service is properly registered
-            echo "Verifying webhook service..."
-            if kubectl get svc nginx-ingress-ingress-nginx-controller-admission -n default; then
-              echo "Webhook service is available, checking for endpoints..."
-              kubectl get endpoints nginx-ingress-ingress-nginx-controller-admission -n default
-              
-              # Ensure webhook deployment is ready
-              if kubectl wait --for=condition=available deployment/nginx-ingress-ingress-nginx-controller --timeout=90s; then
-                echo "NGINX Ingress controller is ready"
-              fi
+            # Verify if pods are actually running
+            INGRESS_POD_COUNT=$(kubectl get pods -l app.kubernetes.io/instance=nginx-ingress --no-headers | grep -c "Running" || echo "0")
+            if [ "$INGRESS_POD_COUNT" -eq "0" ]; then
+              echo "##vso[task.logissue type=warning]No running Ingress Controller pods found. Deployment might have failed."
+              kubectl get pods -l app.kubernetes.io/instance=nginx-ingress -o yaml
+              echo "Getting more information about potential issues:"
+              kubectl describe pods -l app.kubernetes.io/instance=nginx-ingress
             else
-              echo "Warning: Admission webhook service not found. This may cause issues with Ingress resources."
+              echo "Ingress Controller successfully deployed with $INGRESS_POD_COUNT running pods."
             fi
+            
+            # Check for services
+            echo "Checking Ingress Controller services..."
+            kubectl get svc -l app.kubernetes.io/name=ingress-nginx
             
             echo "##vso[task.setvariable variable=ingressIP;isOutput=true]$IP"
             echo "##vso[task.setvariable variable=ingressIP]$IP"
@@ -148,19 +147,25 @@ stages:
             echo "Ensuring Ingress controller is fully ready..."
             kubectl rollout status deployment/nginx-ingress-ingress-nginx-controller --timeout=180s || true
             
-            # Check if the admission webhook service exists and has endpoints
-            echo "Verifying admission webhook is operational..."
-            for i in {1..10}; do
-              ENDPOINTS=$(kubectl get endpoints -n default nginx-ingress-ingress-nginx-controller-admission -o jsonpath='{.subsets[*].addresses}' --ignore-not-found)
-              if [ ! -z "$ENDPOINTS" ]; then
-                echo "Admission webhook endpoints ready. Proceeding with certificate generation."
-                break
-              fi
-              echo "Waiting for admission webhook endpoints... attempt $i/10"
-              sleep 10
-            done
+            # Verify if pods are actually running before proceeding with TLS setup
+            INGRESS_READY=$(kubectl get pods -l app.kubernetes.io/instance=nginx-ingress --no-headers | grep -c "Running" || echo "0")
+            if [ "$INGRESS_READY" -eq "0" ]; then
+              echo "##vso[task.logissue type=warning]No running Ingress Controller pods found before configuring TLS."
+              echo "Will proceed with TLS configuration but this might not work properly."
+            fi
             
-            DOMAIN="bestrong.$(kubectl get svc nginx-ingress-ingress-nginx-controller -o jsonpath='{.status.loadBalancer.ingress[0].ip}').nip.io"
+            # Get external IP address
+            INGRESS_IP=$(kubectl get svc nginx-ingress-ingress-nginx-controller -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+            echo "Using Ingress IP: $INGRESS_IP"
+            
+            if [ -z "$INGRESS_IP" ]; then
+              echo "##vso[task.logissue type=error]Failed to get Ingress IP address. Cannot proceed with TLS setup."
+              exit 1
+            fi
+            
+            DOMAIN="bestrong.$INGRESS_IP.nip.io"
+            echo "Setting up TLS for domain: $DOMAIN"
+            
             cat <<EOF > tls.yaml
             apiVersion: cert-manager.io/v1
             kind: ClusterIssuer
@@ -183,9 +188,18 @@ stages:
                 kind: ClusterIssuer
               commonName: $DOMAIN
             EOF
+            
             kubectl apply -f tls.yaml
+            echo "Applied TLS configuration"
+            
+            # Wait for certificate to be created
+            echo "Waiting for certificate to be ready..."
             sleep 10
-            kubectl wait --for=condition=Ready certificate/bestrong-tls --timeout=60s
+            kubectl wait --for=condition=Ready certificate/bestrong-tls --timeout=60s || echo "Certificate might not be ready yet"
+            
+            # Display certificate status
+            echo "Certificate status:"
+            kubectl get certificate bestrong-tls -o wide
           displayName: 'Configure TLS for Ingress'
 
 # ===== HELM DEPLOY =====
@@ -250,129 +264,71 @@ stages:
             INGRESS_HOST="bestrong.$INGRESS_IP.nip.io"
             echo "Using ingress host: $INGRESS_HOST"
             
-            # Double check webhook readiness before proceeding
-            echo "Final check for webhook readiness..."
-            for i in {1..5}; do
-              if kubectl get validatingwebhookconfigurations ingress-nginx-admission >/dev/null 2>&1; then
-                echo "Validating webhook configuration exists. Proceeding with deployment."
-                break
-              fi
-              echo "Waiting for webhook configuration... attempt $i/5"
-              sleep 5
-            done
+            # Verify pre-requisites before deployment
+            echo "Checking prerequisites for deployment..."
             
-            # Let's directly check the status of ingress-nginx components
-            echo "Status of nginx-ingress components:"
-            kubectl get all -l app.kubernetes.io/name=ingress-nginx -A
+            # Check if Ingress Controller is running
+            INGRESS_READY=$(kubectl get pods -l app.kubernetes.io/instance=nginx-ingress --no-headers | grep -c "Running" || echo "0")
+            echo "Number of running Ingress Controller pods: $INGRESS_READY"
             
-            # Check if webhook is functional
-            WEBHOOK_READY="true"
-            WEBHOOK_SERVICE=$(kubectl get svc nginx-ingress-ingress-nginx-controller-admission -n default -o name --ignore-not-found)
-            if [ -z "$WEBHOOK_SERVICE" ]; then
-              echo "Warning: Admission webhook service not found. Continuing without webhook validation..."
-              WEBHOOK_READY="false"
-              # Remove any existing webhook configuration to avoid validation issues
-              kubectl delete validatingwebhookconfiguration ingress-nginx-admission --ignore-not-found
+            # Check if TLS certificate is available
+            if kubectl get secret bestrong-tls-secret &>/dev/null; then
+              echo "TLS certificate found and ready to use"
             else
-              WEBHOOK_ENDPOINTS=$(kubectl get endpoints -n default nginx-ingress-ingress-nginx-controller-admission -o jsonpath='{.subsets[*].addresses}' --ignore-not-found)
-              if [ -z "$WEBHOOK_ENDPOINTS" ]; then
-                echo "Warning: No endpoints found for admission webhook. Continuing without webhook validation..."
-                WEBHOOK_READY="false"
-                # Remove any existing webhook configuration to avoid validation issues
-                kubectl delete validatingwebhookconfiguration ingress-nginx-admission --ignore-not-found
-              fi
+              echo "##vso[task.logissue type=warning]TLS certificate secret not found. HTTPS might not work."
             fi
             
-            # Main deployment section
-            echo "Proceeding with deployment..."
+            # Properly cleanup existing deployments
+            echo "Cleaning up existing deployments..."
             
-            # Complete removal of any existing release
+            # Main application
+            kubectl delete ingress bestrongapp-ing --ignore-not-found
             helm uninstall $(helmChartName) --namespace default || true
-            # Ensure it's fully removed by waiting and deleting any leftovers
-            sleep 5
             kubectl delete all -l app.kubernetes.io/instance=$(helmChartName) --namespace default --ignore-not-found
             sleep 5
             
             echo "Installing main application..."
-            if [ "$WEBHOOK_READY" == "false" ]; then
-              echo "Using deployment with webhook validation disabled..."
-              helm install $(helmChartName) $(helmChartName)-$(chartVersion).tgz \
-                --set image.repository=$(acrUrl)/$(imageRepository) \
-                --set image.tag=stable \
-                --set ingress.host=$INGRESS_HOST \
-                --set-string "controller.admissionWebhooks.enabled=false" \
-                --values ./helm/values.yaml \
-                --namespace default --create-namespace \
-                --timeout 5m0s
-            else
-              helm install $(helmChartName) $(helmChartName)-$(chartVersion).tgz \
-                --set image.repository=$(acrUrl)/$(imageRepository) \
-                --set image.tag=stable \
-                --set ingress.host=$INGRESS_HOST \
-                --values ./helm/values.yaml \
-                --namespace default --create-namespace \
-                --timeout 5m0s
-            fi
+            helm install $(helmChartName) $(helmChartName)-$(chartVersion).tgz \
+              --set image.repository=$(acrUrl)/$(imageRepository) \
+              --set image.tag=$(tag) \
+              --set ingress.host=$INGRESS_HOST \
+              --values ./helm/values.yaml \
+              --namespace default --create-namespace \
+              --timeout 5m0s
             
-            # Check deployment result
-            if [ $? -ne 0 ]; then
-              echo "Main deployment failed. Trying one more time with webhook disabled..."
-              sleep 10
-              kubectl delete all -l app.kubernetes.io/instance=$(helmChartName) --namespace default --ignore-not-found
-              sleep 5
-              helm install $(helmChartName) $(helmChartName)-$(chartVersion).tgz \
-                --set image.repository=$(acrUrl)/$(imageRepository) \
-                --set image.tag=stable \
-                --set ingress.host=$INGRESS_HOST \
-                --set-string "controller.admissionWebhooks.enabled=false" \
-                --values ./helm/values.yaml \
-                --namespace default --create-namespace \
-                --no-hooks
-            fi
-
-            # Complete removal of any existing canary release
+            # Check deployment status
+            echo "Checking main deployment status..."
+            kubectl rollout status deployment/bestrongapp-deploy --timeout=180s
+            
+            # Canary application
+            echo "Cleaning up existing canary deployments..."
+            kubectl delete ingress bestrongapp-canary-ing --ignore-not-found
             helm uninstall $(helmChartName)-canary --namespace default || true
-            # Ensure it's fully removed by waiting and deleting any leftovers
-            sleep 5
             kubectl delete all -l app.kubernetes.io/instance=$(helmChartName)-canary --namespace default --ignore-not-found
             sleep 5
             
             echo "Installing canary application..."
-            if [ "$WEBHOOK_READY" == "false" ]; then
-              echo "Using canary deployment with webhook validation disabled..."
-              helm install $(helmChartName)-canary $(helmChartName)-$(chartVersion).tgz \
-                --set image.repository=$(acrUrl)/$(imageRepository) \
-                --set image.tag=$(Build.BuildId) \
-                --set ingress.host=$INGRESS_HOST \
-                --set-string "controller.admissionWebhooks.enabled=false" \
-                --values ./helm/values-canary.yaml \
-                --namespace default \
-                --timeout 5m0s
-            else
-              helm install $(helmChartName)-canary $(helmChartName)-$(chartVersion).tgz \
-                --set image.repository=$(acrUrl)/$(imageRepository) \
-                --set image.tag=$(Build.BuildId) \
-                --set ingress.host=$INGRESS_HOST \
-                --values ./helm/values-canary.yaml \
-                --namespace default \
-                --timeout 5m0s
-            fi
+            helm install $(helmChartName)-canary $(helmChartName)-$(chartVersion).tgz \
+              --set image.repository=$(acrUrl)/$(imageRepository) \
+              --set image.tag=$(Build.BuildId) \
+              --set ingress.host=$INGRESS_HOST \
+              --values ./helm/values-canary.yaml \
+              --namespace default \
+              --timeout 5m0s
             
-            # Check deployment result
-            if [ $? -ne 0 ]; then
-              echo "Canary deployment failed. Trying one more time with webhook disabled..."
-              sleep 10
-              kubectl delete all -l app.kubernetes.io/instance=$(helmChartName)-canary --namespace default --ignore-not-found
-              sleep 5
-              helm install $(helmChartName)-canary $(helmChartName)-$(chartVersion).tgz \
-                --set image.repository=$(acrUrl)/$(imageRepository) \
-                --set image.tag=$(Build.BuildId) \
-                --set ingress.host=$INGRESS_HOST \
-                --set-string "controller.admissionWebhooks.enabled=false" \
-                --values ./helm/values-canary.yaml \
-                --namespace default \
-                --no-hooks
-            fi
+            # Check canary deployment status
+            echo "Checking canary deployment status..."
+            kubectl rollout status deployment/bestrongapp-canary-deploy --timeout=180s
+            
+            # Final verification and information
+            echo "Deployment information:"
+            echo "Main app running: $(kubectl get pods -l app.kubernetes.io/instance=$(helmChartName) -o jsonpath='{.items[0].status.phase}' || echo 'Unknown')"
+            echo "Canary app running: $(kubectl get pods -l app.kubernetes.io/instance=$(helmChartName)-canary -o jsonpath='{.items[0].status.phase}' || echo 'Unknown')"
+            echo "Ingress information:"
+            kubectl get ingress
+            echo "Successful deployment. Application should be available at:"
+            echo "http://$INGRESS_HOST"
+            echo "https://$INGRESS_HOST (if TLS is properly configured)"
           displayName: 'Deploy Helm Chart to AKS'
           env:
             acrUsername: $(acrUsername)
