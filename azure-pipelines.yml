@@ -41,7 +41,6 @@ stages:
   jobs:
     - job: ConfigureHTTPS
       displayName: 'Configure HTTPS'
-      name: ConfigureHTTPS
       pool:
         vmImage: 'ubuntu-latest'
       steps:
