@@ -93,7 +93,9 @@ stages:
             # Simplified Ingress Controller installation - removed problematic webhook parameters
             helm install nginx-ingress ingress-nginx/ingress-nginx \
               --set controller.service.loadBalancerIP=$(staticIpAddress) \
-              --set controller.service.annotations."service\.beta\.kubernetes\.io/azure-load-balancer-health-probe-request-path"=/healthz
+              --set controller.service.annotations."service\.beta\.kubernetes\.io/azure-load-balancer-health-probe-request-path"=/healthz \
+              --set controller.admissionWebhooks.enabled=false
+
               
             echo "Waiting for external IP..."
             for i in {1..30}; do
