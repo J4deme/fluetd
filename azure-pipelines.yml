@@ -94,7 +94,9 @@ stages:
               sleep 10
             done
             echo "##vso[task.setvariable variable=ingressIP;isOutput=true]$IP"
+            echo "##vso[task.setvariable variable=ingressIP]$IP"
           displayName: 'Install NGINX Ingress'
+          name: ingressInstall
 
         - script: |
             helm repo add jetstack https://charts.jetstack.io
@@ -142,7 +144,7 @@ stages:
   displayName: 'Deploy App via Helm'
   dependsOn: SetupHTTPS
   variables:
-    ingressIP: $[ stageDependencies.SetupHTTPS.ConfigureIngress.outputs['ingressIP'] ]
+    ingressIP: $[ stageDependencies.SetupHTTPS.ConfigureIngress.outputs['ingressInstall.ingressIP'] ]
     chartVersion: '1.0.0-$(Build.BuildId)'
     helmChartName: 'bestrongapp'
     acrUrl: '$(containerRegistry)'
@@ -181,11 +183,29 @@ stages:
             helm registry login $(acrUrl) --username $(acrUsername) --password $(acrPassword)
             helm pull oci://$(acrUrl)/helm/$(helmChartName) --version $(chartVersion)
 
+            # Fetch IP directly if variable is not set
+            if [ -z "$(ingressIP)" ]; then
+              INGRESS_IP=$(kubectl get svc nginx-ingress-ingress-nginx-controller -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+              echo "Using directly fetched IP: $INGRESS_IP"
+            else
+              INGRESS_IP=$(ingressIP)
+              echo "Using pipeline variable IP: $INGRESS_IP"
+            fi
+
+            # Validation to ensure we don't create invalid hostnames
+            if [ -z "$INGRESS_IP" ]; then
+              echo "##vso[task.logissue type=error]No Ingress IP found. Cannot proceed with deployment."
+              exit 1
+            fi
+
+            INGRESS_HOST="bestrong.$INGRESS_IP.nip.io"
+            echo "Using ingress host: $INGRESS_HOST"
+
             helm uninstall $(helmChartName) --namespace default || true
             helm install $(helmChartName) $(helmChartName)-$(chartVersion).tgz \
               --set image.repository=$(acrUrl)/$(imageRepository) \
               --set image.tag=stable \
-              --set ingress.host=bestrong.$(ingressIP).nip.io \
+              --set ingress.host=$INGRESS_HOST \
               --values ./helm/values.yaml \
               --namespace default --create-namespace
 
@@ -193,7 +213,7 @@ stages:
             helm install $(helmChartName)-canary $(helmChartName)-$(chartVersion).tgz \
               --set image.repository=$(acrUrl)/$(imageRepository) \
               --set image.tag=$(Build.BuildId) \
-              --set ingress.host=bestrong.$(ingressIP).nip.io \
+              --set ingress.host=$INGRESS_HOST \
               --values ./helm/values-canary.yaml \
               --namespace default
           displayName: 'Deploy Helm Chart to AKS'
