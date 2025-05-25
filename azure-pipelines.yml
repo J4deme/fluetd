@@ -202,28 +202,28 @@ stages:
             DOMAIN="bestrong.$INGRESS_IP.nip.io"
             echo "Setting up TLS for domain: $DOMAIN"
             
-            cat <<EOF > tls.yaml
-            apiVersion: cert-manager.io/v1
-            kind: ClusterIssuer
-            metadata:
-              name: selfsigned-cluster-issuer
-            spec:
-              selfSigned: {}
-            ---
-            apiVersion: cert-manager.io/v1
-            kind: Certificate
-            metadata:
-              name: bestrong-tls
-              namespace: default
-            spec:
-              dnsNames:
-                - $DOMAIN
-              secretName: bestrong-tls-secret
-              issuerRef:
-                name: selfsigned-cluster-issuer
-                kind: ClusterIssuer
-              commonName: $DOMAIN
-            EOF
+            cat << EOFTLS > tls.yaml
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: selfsigned-cluster-issuer
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: bestrong-tls
+  namespace: default
+spec:
+  dnsNames:
+    - $DOMAIN
+  secretName: bestrong-tls-secret
+  issuerRef:
+    name: selfsigned-cluster-issuer
+    kind: ClusterIssuer
+  commonName: $DOMAIN
+EOFTLS
             
             kubectl apply -f tls.yaml
             echo "Applied TLS configuration"
@@ -363,28 +363,28 @@ stages:
               echo "##vso[task.logissue type=warning]TLS certificate secret not found. Creating new one."
               
               # Create a new self-signed certificate
-              cat <<EOF > tls.yaml
-              apiVersion: cert-manager.io/v1
-              kind: ClusterIssuer
-              metadata:
-                name: selfsigned-cluster-issuer
-              spec:
-                selfSigned: {}
-              ---
-              apiVersion: cert-manager.io/v1
-              kind: Certificate
-              metadata:
-                name: bestrong-tls
-                namespace: default
-              spec:
-                dnsNames:
-                  - $INGRESS_HOST
-                secretName: bestrong-tls-secret
-                issuerRef:
-                  name: selfsigned-cluster-issuer
-                  kind: ClusterIssuer
-                commonName: $INGRESS_HOST
-              EOF
+              cat << EOFTLS > tls.yaml
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: selfsigned-cluster-issuer
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: bestrong-tls
+  namespace: default
+spec:
+  dnsNames:
+    - $INGRESS_HOST
+  secretName: bestrong-tls-secret
+  issuerRef:
+    name: selfsigned-cluster-issuer
+    kind: ClusterIssuer
+  commonName: $INGRESS_HOST
+EOFTLS
               
               kubectl apply -f tls.yaml
               sleep 10
