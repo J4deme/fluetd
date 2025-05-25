@@ -7,7 +7,6 @@ resources:
 - repo: self
 
 variables:
-  # Container registry service connection established during pipeline creation
   dockerRegistryServiceConnection: '6862ce6f-7d49-40b0-9089-ed610706205c'
   imageRepository: 'bestrong'
   containerRegistry: 'bestrongaksacr12.azurecr.io'
@@ -42,6 +41,7 @@ stages:
   jobs:
     - job: ConfigureHTTPS
       displayName: 'Configure HTTPS'
+      name: ConfigureHTTPS
       pool:
         vmImage: 'ubuntu-latest'
       steps:
@@ -74,7 +74,6 @@ stages:
             scriptType: 'bash'
             scriptLocation: 'inlineScript'
             inlineScript: |
-              # Create IP in MC_ resource group
               az network public-ip create \
                 --resource-group "MC_bestrongAKS-rg_bestrongAKS12_westeurope" \
                 --name bestrong-ingress-ip \
@@ -82,12 +81,10 @@ stages:
                 --allocation-method static \
                 --location westeurope
 
-              # Get the created IP address
               IP_ADDRESS=$(az network public-ip show \
                 --resource-group "MC_bestrongAKS-rg_bestrongAKS12_westeurope" \
                 --name bestrong-ingress-ip \
                 --query ipAddress -o tsv)
-              echo "Static IP address: $IP_ADDRESS"
               echo "##vso[task.setvariable variable=staticIpAddress]$IP_ADDRESS"
 
         - task: Bash@3
@@ -95,28 +92,13 @@ stages:
           inputs:
             targetType: 'inline'
             script: |
-              # Uninstall existing ingress controller if any
               helm uninstall nginx-ingress --namespace default || true
-              
-              # Повністю прибираємо всі залишки попереднього Ingress Controller
               kubectl delete validatingwebhookconfiguration ingress-nginx-admission --ignore-not-found
               kubectl delete mutatingwebhookconfiguration ingress-nginx-admission --ignore-not-found
               kubectl delete -A ValidatingWebhookConfiguration ingress-nginx-admission --ignore-not-found
               kubectl delete deployment nginx-ingress-ingress-nginx-controller --ignore-not-found
               kubectl delete svc nginx-ingress-ingress-nginx-controller --ignore-not-found
-              
-              # Перевірка статусу системи перед встановленням
-              echo "Перевірка статусу кластера перед встановленням Ingress:"
-              kubectl get nodes
-              kubectl get ns
-              kubectl get pods -A | grep ingress
-              
-              # Чекаємо для завершення видалення
               sleep 15
-              
-              echo "Installing NGINX Ingress Controller with explicitly disabled webhook validation..."
-              
-              # Встановлюємо Ingress Controller з явно відключеними webhook'ами та примусовим чеканням
               helm install nginx-ingress ingress-nginx/ingress-nginx \
                 --set controller.service.loadBalancerIP=$(staticIpAddress) \
                 --set controller.service.annotations."service\.beta\.kubernetes\.io/azure-load-balancer-health-probe-request-path"=/healthz \
@@ -128,24 +110,6 @@ stages:
                 --version 4.0.13 \
                 --wait \
                 --timeout 300s
-              
-              # Wait for IP address to be assigned
-              echo "Waiting for external IP..."
-              for i in {1..30}; do
-                IP=$(kubectl get svc nginx-ingress-ingress-nginx-controller -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
-                if [[ ! -z "$IP" ]]; then
-                  echo "IP assigned: $IP"
-                  break
-                fi
-                echo "Attempt $i: Waiting for IP assignment..."
-                kubectl get svc nginx-ingress-ingress-nginx-controller
-                sleep 10
-              done
-              
-              # Verify Ingress Controller deployment success
-              echo "Checking NGINX Ingress Controller pods..."
-              kubectl get pods -l app.kubernetes.io/name=ingress-nginx -o wide
-              kubectl get pods -l app.kubernetes.io/instance=nginx-ingress -o wide
 
         - task: Bash@3
           displayName: 'Install cert-manager with CRDs'
@@ -167,22 +131,8 @@ stages:
           inputs:
             targetType: 'inline'
             script: |
-              # Wait for Nginx Ingress controller to be fully ready
-              echo "Ensuring Ingress controller is fully ready..."
-              kubectl rollout status deployment/nginx-ingress-ingress-nginx-controller --timeout=180s || true
-              
-              # Get external IP address
               INGRESS_IP=$(kubectl get svc nginx-ingress-ingress-nginx-controller -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
-              echo "Using Ingress IP: $INGRESS_IP"
-              
-              if [ -z "$INGRESS_IP" ]; then
-                echo "##vso[task.logissue type=error]Failed to get Ingress IP address. Cannot proceed with TLS setup."
-                exit 1
-              fi
-              
               DOMAIN="bestrong.$INGRESS_IP.nip.io"
-              echo "Setting up TLS for domain: $DOMAIN"
-              
               cat <<EOF > tls.yaml
               apiVersion: cert-manager.io/v1
               kind: ClusterIssuer
@@ -205,18 +155,9 @@ stages:
                   kind: ClusterIssuer
                 commonName: $DOMAIN
               EOF
-              
               kubectl apply -f tls.yaml
-              echo "Applied TLS configuration"
-              
-              # Wait for certificate to be created
-              echo "Waiting for certificate to be ready..."
               sleep 10
               kubectl wait --for=condition=Ready certificate/bestrong-tls --timeout=60s || echo "Certificate might not be ready yet"
-              
-              # Display certificate status
-              echo "Certificate status:"
-              kubectl get certificate bestrong-tls -o wide
 
         - task: Bash@3
           displayName: 'Save Ingress IP for deployment'
@@ -225,7 +166,6 @@ stages:
             targetType: 'inline'
             script: |
               IP=$(kubectl get service nginx-ingress-ingress-nginx-controller -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
-              echo "Ingress IP: $IP"
               echo "##vso[task.setvariable variable=ingressIP;isOutput=true]$IP"
 
 # ===== HELM DEPLOY =====
@@ -286,80 +226,12 @@ stages:
               helm registry login $(containerRegistry) --username $(acrUsername) --password $(acrPassword)
               helm pull oci://$(containerRegistry)/helm/$(helmChartName) --version $(chartVersion)
 
-              # Fetch IP directly if variable is not set
-              if [ -z "$(ingressIP)" ]; then
-                INGRESS_IP=$(kubectl get svc nginx-ingress-ingress-nginx-controller -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
-                echo "Using directly fetched IP: $INGRESS_IP"
-              else
-                INGRESS_IP=$(ingressIP)
-                echo "Using pipeline variable IP: $INGRESS_IP"
-              fi
-
-              # Validation to ensure we don't create invalid hostnames
-              if [ -z "$INGRESS_IP" ]; then
-                echo "##vso[task.logissue type=error]No Ingress IP found. Cannot proceed with deployment."
-                echo "Attempting to debug Ingress Controller issues:"
-                kubectl get pods -A | grep ingress
-                kubectl get svc -A | grep ingress
-                exit 1
-              fi
-
+              INGRESS_IP=$(ingressIP)
               INGRESS_HOST="bestrong.$INGRESS_IP.nip.io"
-              echo "Using ingress host: $INGRESS_HOST"
-              
-              # Verify pre-requisites before deployment
-              echo "Checking prerequisites for deployment..."
-              
-              # Check if Ingress Controller is running
-              INGRESS_READY=$(kubectl get pods -l app.kubernetes.io/instance=nginx-ingress --no-headers | grep -c "Running" || echo "0")
-              echo "Number of running Ingress Controller pods: $INGRESS_READY"
-              
-              # Check if TLS certificate is available
-              if kubectl get secret bestrong-tls-secret &>/dev/null; then
-                echo "TLS certificate found and ready to use"
-              else
-                echo "##vso[task.logissue type=warning]TLS certificate secret not found. Creating new one."
-                
-                # Create a new certificate
-                cat <<EOF > cert.yaml
-                apiVersion: cert-manager.io/v1
-                kind: Certificate
-                metadata:
-                  name: bestrong-tls
-                  namespace: default
-                spec:
-                  dnsNames:
-                    - $INGRESS_HOST
-                  secretName: bestrong-tls-secret
-                  issuerRef:
-                    name: selfsigned-cluster-issuer
-                    kind: ClusterIssuer
-                  commonName: $INGRESS_HOST
-                EOF
-                
-                kubectl apply -f cert.yaml
-                sleep 10
-                kubectl wait --for=condition=Ready certificate/bestrong-tls --timeout=60s || echo "Certificate might not be ready yet"
-              fi
-              
-              # Properly cleanup existing deployments
-              echo "Cleaning up existing deployments..."
-              
-              # Main application
-              kubectl delete ingress bestrongapp-ing --ignore-not-found
-              helm uninstall $(helmChartName) --namespace default || true
-              kubectl delete all -l app.kubernetes.io/instance=$(helmChartName) --namespace default --ignore-not-found
-              sleep 5
-              
-              echo "Installing main application..."
-              # Додаємо відладочний вивід параметрів
-              echo "Image: $(containerRegistry)/$(imageRepository):$(tag)"
-              echo "Ingress Host: $INGRESS_HOST"
-              
-              # Створюємо тимчасовий values файл з оновленими параметрами
+
               cat helm/values.yaml > updated-values.yaml
               sed -i "s|host:.*|host: $INGRESS_HOST|g" updated-values.yaml
-              
+
               helm install $(helmChartName) $(helmChartName)-$(chartVersion).tgz \
                 --set image.repository=$(containerRegistry)/$(imageRepository) \
                 --set image.tag=$(tag) \
@@ -368,29 +240,3 @@ stages:
                 --namespace default --create-namespace \
                 --wait \
                 --timeout 5m0s
-              
-              # Canary application
-              echo "Cleaning up existing canary deployments..."
-              kubectl delete ingress bestrongapp-canary-ing --ignore-not-found
-              helm uninstall $(helmChartName)-canary --namespace default || true
-              kubectl delete all -l app.kubernetes.io/instance=$(helmChartName)-canary --namespace default --ignore-not-found
-              sleep 5
-              
-              echo "Installing canary application..."
-              # Створюємо тимчасовий values файл з оновленими параметрами для canary
-              cat helm/values-canary.yaml > updated-values-canary.yaml
-              sed -i "s|host:.*|host: $INGRESS_HOST|g" updated-values-canary.yaml
-              
-              helm install $(helmChartName)-canary $(helmChartName)-$(chartVersion).tgz \
-                --set image.repository=$(containerRegistry)/$(imageRepository) \
-                --set image.tag=$(Build.BuildId) \
-                --set ingress.host=$INGRESS_HOST \
-                --values updated-values-canary.yaml \
-                --namespace default
-              
-              echo "Successful deployment. Application should be available at:"
-              echo "http://$INGRESS_HOST"
-              echo "https://$INGRESS_HOST (if TLS is properly configured)"
-          env:
-            acrUsername: $(acrUsername)
-            acrPassword: $(acrPassword)
