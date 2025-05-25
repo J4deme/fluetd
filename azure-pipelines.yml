@@ -93,6 +93,11 @@ stages:
               fi
               sleep 10
             done
+            
+            # Wait for Nginx Ingress pods to be ready
+            echo "Waiting for Nginx Ingress controller to be ready..."
+            kubectl wait --namespace default --for=condition=ready pod --selector=app.kubernetes.io/component=controller --timeout=180s
+            
             echo "##vso[task.setvariable variable=ingressIP;isOutput=true]$IP"
             echo "##vso[task.setvariable variable=ingressIP]$IP"
           displayName: 'Install NGINX Ingress'
@@ -111,6 +116,21 @@ stages:
           displayName: 'Install cert-manager'
 
         - script: |
+            # Wait for Nginx Ingress controller to be fully ready
+            echo "Ensuring Ingress controller is fully ready..."
+            kubectl wait --namespace default --for=condition=available deployment/nginx-ingress-ingress-nginx-controller --timeout=180s || true
+            
+            # Check if the admission webhook service exists and has endpoints
+            for i in {1..6}; do
+              ENDPOINTS=$(kubectl get endpoints -n default nginx-ingress-ingress-nginx-controller-admission -o jsonpath='{.subsets[*].addresses}' --ignore-not-found)
+              if [ ! -z "$ENDPOINTS" ]; then
+                echo "Admission webhook endpoints ready."
+                break
+              fi
+              echo "Waiting for admission webhook endpoints... attempt $i/6"
+              sleep 10
+            done
+            
             DOMAIN="bestrong.$(kubectl get svc nginx-ingress-ingress-nginx-controller -o jsonpath='{.status.loadBalancer.ingress[0].ip}').nip.io"
             cat <<EOF > tls.yaml
             apiVersion: cert-manager.io/v1
@@ -200,12 +220,27 @@ stages:
 
             INGRESS_HOST="bestrong.$INGRESS_IP.nip.io"
             echo "Using ingress host: $INGRESS_HOST"
+            
+            # Check for admission webhook and wait for it to be ready
+            echo "Checking for admission webhook readiness..."
+            WEBHOOK_EXISTS=$(kubectl get svc nginx-ingress-ingress-nginx-controller-admission -n default -o name --ignore-not-found)
+            
+            if [ ! -z "$WEBHOOK_EXISTS" ]; then
+              echo "Admission webhook service found, waiting for endpoints to be ready..."
+              kubectl wait --for=condition=ready pod --selector=app.kubernetes.io/component=controller -n default --timeout=60s || true
+              sleep 15  # Additional wait to ensure webhook is ready
+            else
+              echo "Admission webhook service not found. Disabling admission webhook for this deployment."
+              # If webhook doesn't exist, create an annotation to bypass validation
+              WEBHOOK_BYPASS="--set-string controller.admissionWebhooks.enabled=false"
+            fi
 
             helm uninstall $(helmChartName) --namespace default || true
             helm install $(helmChartName) $(helmChartName)-$(chartVersion).tgz \
               --set image.repository=$(acrUrl)/$(imageRepository) \
               --set image.tag=stable \
               --set ingress.host=$INGRESS_HOST \
+              ${WEBHOOK_BYPASS:-} \
               --values ./helm/values.yaml \
               --namespace default --create-namespace
 
@@ -214,6 +249,7 @@ stages:
               --set image.repository=$(acrUrl)/$(imageRepository) \
               --set image.tag=$(Build.BuildId) \
               --set ingress.host=$INGRESS_HOST \
+              ${WEBHOOK_BYPASS:-} \
               --values ./helm/values-canary.yaml \
               --namespace default
           displayName: 'Deploy Helm Chart to AKS'
