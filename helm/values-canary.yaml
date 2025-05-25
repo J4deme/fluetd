@@ -1,0 +1,30 @@
+replicaCount: 1
+
+image:
+  repository: bestrong
+  tag: $(tag)
+  pullPolicy: Always
+
+service:
+  type: NodePort
+  port: 80
+
+containerPort: 80
+
+ingress:
+  host: 4.210.171.228.nip.io   # або інший test-домен
+  canary:
+    enabled: true                 # або true, якщо треба
+    weight: 10
+
+resources:
+  limits:
+    memory: "256Mi"
+    cpu: "200m"
+  requests:
+    memory: "128Mi"
+    cpu: "100m"
+
+labels:
+  app: webapp
+  tier: backend

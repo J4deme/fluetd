@@ -1,0 +1,292 @@
+trigger:
+  branches:
+    include:
+      - main
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+variables:
+  azureSubscription: 'c5d3c60b-d8e6-42e4-b75e-b6dcfbee677b' 
+  dockerRegistryServiceConnection: 'c81b072f-0a0b-4208-9f65-f39e428e6c7f'
+  imageRepository: 'bestrong'
+  containerRegistry: 'bestrongaksacr12.azurecr.io'
+  dockerfilePath: '$(Build.SourcesDirectory)/Dockerfile'
+  tag: '$(Build.BuildId)'
+
+
+stages:
+- stage: Build
+  displayName: Build and push stage
+  jobs:
+  - job: Build
+    displayName: Build
+    pool:
+      name: Default
+    steps:
+    - task: Docker@2
+      displayName: Build and push an image to container registry
+      inputs:
+        command: buildAndPush
+        repository: $(imageRepository)
+        dockerfile: $(dockerfilePath)
+        containerRegistry: $(dockerRegistryServiceConnection)
+        tags: |
+          $(tag)
+
+- stage: SetupHTTPS
+  displayName: 'HTTPS Setup with cert-manager'
+  dependsOn: Build
+  jobs:
+  - job: ConfigureHTTPS
+    displayName: 'Configure HTTPS'
+    pool:
+      name: Default
+    steps:
+    - task: AzureCLI@2
+      displayName: 'Get AKS Credentials'
+      inputs:
+        azureSubscription: 'bestrong-devops-sp'
+        scriptType: 'bash'
+        scriptLocation: 'inlineScript'
+        inlineScript: |
+          az aks get-credentials --resource-group bestrongAKS-rg --name bestrongAKS12
+    - task: HelmInstaller@1
+      displayName: 'Install Helm'
+      inputs:
+        helmVersionToInstall: 'latest'
+
+    - task: Bash@3
+      displayName: 'Add Helm Repositories'
+      inputs:
+        targetType: 'inline'
+        script: |
+          helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx
+          helm repo update
+
+    - task: AzureCLI@2
+      displayName: 'Create Static IP Address in MC_ Resource Group'
+      inputs:
+        azureSubscription: 'bestrong-devops-sp'
+        scriptType: 'bash'
+        scriptLocation: 'inlineScript'
+        inlineScript: |
+          # Create IP in MC_ resource group
+          az network public-ip create \
+            --resource-group "MC_bestrongAKS-rg_bestrongAKS12_westeurope" \
+            --name bestrong-ingress-ip \
+            --sku Standard \
+            --allocation-method static \
+            --location westeurope
+          
+          # Get the created IP address
+          IP_ADDRESS=$(az network public-ip show --resource-group "MC_bestrongAKS-rg_bestrongAKS12_westeurope" --name bestrong-ingress-ip --query ipAddress -o tsv)
+          echo "Static IP address: $IP_ADDRESS"
+          echo "##vso[task.setvariable variable=staticIpAddress]$IP_ADDRESS"
+
+    - task: Bash@3
+      displayName: 'Install NGINX Ingress Controller'
+      inputs:
+        targetType: 'inline'
+        script: |
+          helm install nginx-ingress ingress-nginx/ingress-nginx \
+            --set controller.service.loadBalancerIP=$(staticIpAddress) \
+            --set controller.service.annotations."service\.beta\.kubernetes\.io/azure-load-balancer-health-probe-request-path"=/healthz
+          
+          # Wait for IP address to be assigned
+          echo "Waiting for IP address to be assigned..."
+          ATTEMPTS=0
+          while [ $ATTEMPTS -lt 30 ]; do
+            IP=$(kubectl get service nginx-ingress-ingress-nginx-controller -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+            if [ ! -z "$IP" ]; then
+              echo "IP address assigned: $IP"
+              break
+            fi
+            echo "Waiting... ($ATTEMPTS/30)"
+            sleep 10
+            ATTEMPTS=$((ATTEMPTS+1))
+          done
+          
+          if [ -z "$IP" ]; then
+            echo "Failed to assign IP address."
+            exit 1
+          else
+            echo "Ingress controller successfully configured with IP: $IP"
+          fi
+
+    - task: HelmInstaller@1
+      displayName: 'Install cert-manager'
+      inputs:
+        helmVersionToInstall: 'latest'
+
+    - task: Bash@3
+      displayName: 'Install cert-manager with CRDs'
+      inputs:
+        targetType: 'inline'
+        script: |
+          # Add cert-manager repo
+          helm repo add jetstack https://charts.jetstack.io
+          helm repo update
+          
+          # Install cert-manager with CRDs
+          kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.12.0/cert-manager.crds.yaml
+          
+          helm install cert-manager jetstack/cert-manager \
+            --namespace cert-manager \
+            --create-namespace \
+            --version v1.12.0
+          
+          # Wait for cert-manager to be ready
+          kubectl -n cert-manager wait --for=condition=available --timeout=120s deployment/cert-manager
+          kubectl -n cert-manager wait --for=condition=available --timeout=120s deployment/cert-manager-webhook
+
+    - task: Bash@3
+      displayName: 'Apply TLS configuration'
+      inputs:
+        targetType: 'inline'
+        script: |
+          IP=$(kubectl get service nginx-ingress-ingress-nginx-controller -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+          DOMAIN="${IP}.nip.io"
+          # Create tls-deploy.yaml file
+          cat <<EOF > tls-deploy.yaml
+          # ClusterIssuer for selfsigned certificate
+          apiVersion: cert-manager.io/v1
+          kind: ClusterIssuer
+          metadata:
+            name: selfsigned-cluster-issuer
+          spec:
+            selfSigned: {}
+          ---
+          # Certificate
+          apiVersion: cert-manager.io/v1
+          kind: Certificate
+          metadata:
+            name: bestrong-tls
+            namespace: default
+          spec:
+            dnsNames:
+              - ${DOMAIN}
+            secretName: bestrong-tls-secret
+            issuerRef:
+              name: selfsigned-cluster-issuer
+              kind: ClusterIssuer
+            commonName: ${DOMAIN}
+          EOF
+          
+          # Apply configuration
+          kubectl apply -f tls-deploy.yaml
+          
+          # Wait for the certificate to be ready
+          sleep 10
+          kubectl wait --for=condition=Ready certificate/bestrong-tls --timeout=60s
+          
+          # Verify certificate creation
+          kubectl get certificate bestrong-tls
+          kubectl get secret bestrong-tls-secret
+
+    - task: Bash@3
+      displayName: 'Save Ingress IP for deployment'
+      name: SaveIngressIP
+      inputs:
+        targetType: 'inline'
+        script: |
+          IP=$(kubectl get service nginx-ingress-ingress-nginx-controller -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+          echo "Ingress IP: $IP"
+          echo "##vso[task.setvariable variable=ingressIP;isOutput=true]$IP"
+
+- stage: HelmDeploy
+  displayName: 'Helm Chart Deploy to AKS'
+  dependsOn: SetupHTTPS
+  variables:
+    ingressIP: $[ stageDependencies.SetupHTTPS.ConfigureHTTPS.outputs['SaveIngressIP.ingressIP'] ]
+    chartVersion: '1.0.0-$(Build.BuildId)'
+    helmChartName: 'bestrongapp'
+    acrUrl: 'bestrongaksacr12.azurecr.io'
+  jobs:
+  - job: DeployHelm
+    pool:
+      name: Default
+    variables:
+      chartVersion: '1.0.0-$(Build.BuildId)'
+      helmChartName: 'bestrongapp'
+      acrUrl: 'bestrongaksacr12.azurecr.io'
+    steps:
+
+    - task: AzureCLI@2
+      displayName: 'Get AKS Credentials'
+      inputs:
+        azureSubscription: 'bestrong-devops-sp'
+        scriptType: 'bash'
+        scriptLocation: 'inlineScript'
+        inlineScript: |
+          az aks get-credentials --resource-group bestrongAKS-rg --name bestrongAKS12
+
+    - task: HelmInstaller@1
+      displayName: 'Install Helm'
+      inputs:
+        helmVersionToInstall: 'latest'
+
+    - task: Bash@3
+      displayName: 'Package Helm Chart'
+      inputs:
+        targetType: 'inline'
+        script: |
+          helm package helm/ --version 1.0.0-$(Build.BuildId)
+
+    - task: Bash@3
+      displayName: 'Login to ACR and Push Helm Chart'
+      inputs:
+        targetType: 'inline'
+        script: |
+          export HELM_EXPERIMENTAL_OCI=1
+
+          CHART_VERSION="1.0.0-$(Build.BuildId)"
+          CHART_NAME="bestrongapp"
+
+          echo "Logging in to Helm registry with username and password"
+          helm registry login $(acrUrl) \
+            --username $(acrUsername) \
+            --password $(acrPassword)
+
+          echo "Pushing Helm chart ${CHART_NAME}-${CHART_VERSION}.tgz"
+          helm push ${CHART_NAME}-${CHART_VERSION}.tgz oci://$(acrUrl)/helm
+      env:
+        acrUsername: $(acrUsername)
+        acrPassword: $(acrPassword)
+
+
+    - task: Bash@3
+      displayName: 'Deploy Helm Chart from ACR to AKS'
+      inputs:
+        targetType: 'inline'
+        script: |
+          export HELM_EXPERIMENTAL_OCI=1
+          helm registry login $(acrUrl) \
+            --username $(acrUsername) \
+            --password $(acrPassword)
+
+
+          helm pull oci://$(acrUrl)/helm/$(helmChartName) --version $(chartVersion)
+
+          echo "helmChartName: $(helmChartName)"
+          echo "chartVersion: $(chartVersion)"
+          echo "acrUrl: $(acrUrl)"
+          echo "imageRepository: $(imageRepository)"
+          echo "ingressIP: $(ingressIP)"
+          echo "buildID: $(Build.BuildId)"
+          helm uninstall $(helmChartName) --namespace default || true
+
+          helm install  $(helmChartName) $(helmChartName)-$(chartVersion).tgz \
+            --set image.repository=$(acrUrl)/$(imageRepository) \
+            --set image.tag=stable \
+            --set ingress.host=$(ingressIP).nip.io \
+            --values ./helm/values.yaml \
+            --namespace default --create-namespace
+
+          helm uninstall $(helmChartName)-canary --namespace default || true
+          helm install $(helmChartName)-canary $(helmChartName)-$(chartVersion).tgz \
+            --set image.repository=$(acrUrl)/$(imageRepository) \
+            --set image.tag=$(Build.BuildId) \
+            --set ingress.host=$(ingressIP).nip.io \
+            --values ./helm/values-canary.yaml \
+            --namespace default
