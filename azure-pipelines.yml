@@ -7,7 +7,7 @@ pool:
   vmImage: 'ubuntu-latest'
 
 variables:
-  azureSubscription: 'c5d3c60b-d8e6-42e4-b75e-b6dcfbee677b' 
+  azureSubscription: 'a14bd82f-81df-4fff-9a13-546fa670c9f2' 
   dockerRegistryServiceConnection: 'c81b072f-0a0b-4208-9f65-f39e428e6c7f'
   imageRepository: 'bestrong'
   containerRegistry: 'bestrongaksacr12.azurecr.io'
@@ -46,7 +46,7 @@ stages:
     - task: AzureCLI@2
       displayName: 'Get AKS Credentials'
       inputs:
-        azureSubscription: 'bestrong-devops-sp'
+        azureSubscription: 'bestrong-arm'
         scriptType: 'bash'
         scriptLocation: 'inlineScript'
         inlineScript: |
@@ -67,7 +67,7 @@ stages:
     - task: AzureCLI@2
       displayName: 'Create Static IP Address in MC_ Resource Group'
       inputs:
-        azureSubscription: 'bestrong-devops-sp'
+        azureSubscription: 'bestrong-arm'
         scriptType: 'bash'
         scriptLocation: 'inlineScript'
         inlineScript: |
@@ -215,7 +215,7 @@ stages:
     - task: AzureCLI@2
       displayName: 'Get AKS Credentials'
       inputs:
-        azureSubscription: 'bestrong-devops-sp'
+        azureSubscription: 'bestrong-arm'
         scriptType: 'bash'
         scriptLocation: 'inlineScript'
         inlineScript: |
