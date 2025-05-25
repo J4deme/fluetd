@@ -109,7 +109,7 @@ stages:
           displayName: 'Install cert-manager'
 
         - script: |
-            DOMAIN="$(kubectl get svc nginx-ingress-ingress-nginx-controller -o jsonpath='{.status.loadBalancer.ingress[0].ip}').nip.io"
+            DOMAIN="bestrong.$(kubectl get svc nginx-ingress-ingress-nginx-controller -o jsonpath='{.status.loadBalancer.ingress[0].ip}').nip.io"
             cat <<EOF > tls.yaml
             apiVersion: cert-manager.io/v1
             kind: ClusterIssuer
@@ -185,7 +185,7 @@ stages:
             helm install $(helmChartName) $(helmChartName)-$(chartVersion).tgz \
               --set image.repository=$(acrUrl)/$(imageRepository) \
               --set image.tag=stable \
-              --set ingress.host=$(ingressIP).nip.io \
+              --set ingress.host=bestrong.$(ingressIP).nip.io \
               --values ./helm/values.yaml \
               --namespace default --create-namespace
 
@@ -193,7 +193,7 @@ stages:
             helm install $(helmChartName)-canary $(helmChartName)-$(chartVersion).tgz \
               --set image.repository=$(acrUrl)/$(imageRepository) \
               --set image.tag=$(Build.BuildId) \
-              --set ingress.host=$(ingressIP).nip.io \
+              --set ingress.host=bestrong.$(ingressIP).nip.io \
               --values ./helm/values-canary.yaml \
               --namespace default
           displayName: 'Deploy Helm Chart to AKS'
