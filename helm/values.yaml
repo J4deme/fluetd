@@ -12,7 +12,7 @@ service:
 containerPort: 80
 
 ingress:
-  host: 4.210.171.228.nip.io   # або інший test-домен
+  host: bestrong.4.210.171.228.nip.io   # Fixed format: name.IP.nip.io
   canary:
     enabled: false                 # або true, якщо треба
     weight: 10

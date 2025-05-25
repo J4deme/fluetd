@@ -2,11 +2,11 @@ ingress:
   enabled: true
   ingressClassName: nginx
   hosts:
-    - grafana.128.251.178.137.nip.io
+    - grafana-bestrong.128.251.178.137.nip.io
   tls:
     - secretName: grafana-tls
       hosts:
-        - grafana.128.251.178.137.nip.io
+        - grafana-bestrong.128.251.178.137.nip.io
 service:
   type: ClusterIP
 
