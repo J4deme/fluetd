@@ -46,7 +46,7 @@ stages:
     - task: AzureCLI@2
       displayName: 'Get AKS Credentials'
       inputs:
-        azureSubscription: 'bestrong-arm'
+        azureSubscription: 'destrong-arm'
         scriptType: 'bash'
         scriptLocation: 'inlineScript'
         inlineScript: |
@@ -67,7 +67,7 @@ stages:
     - task: AzureCLI@2
       displayName: 'Create Static IP Address in MC_ Resource Group'
       inputs:
-        azureSubscription: 'bestrong-arm'
+        azureSubscription: 'destrong-arm'
         scriptType: 'bash'
         scriptLocation: 'inlineScript'
         inlineScript: |
@@ -215,7 +215,7 @@ stages:
     - task: AzureCLI@2
       displayName: 'Get AKS Credentials'
       inputs:
-        azureSubscription: 'bestrong-arm'
+        azureSubscription: 'destrong-arm'
         scriptType: 'bash'
         scriptLocation: 'inlineScript'
         inlineScript: |
