@@ -104,7 +104,7 @@ stages:
             # Показуємо доступні версії чарту
             helm search repo ingress-nginx --versions | head -5
             
-            # Встановлюємо Ingress Controller з явно відключеними webhook'ами та примусовим чеканням
+            # Встановлює Ingress Controller з явно відключеними webhook'ами та примусовим чеканням
             helm install nginx-ingress ingress-nginx/ingress-nginx \
               --set controller.service.loadBalancerIP=$(staticIpAddress) \
               --set controller.service.annotations."service\.beta\.kubernetes\.io/azure-load-balancer-health-probe-request-path"=/healthz \
