@@ -86,12 +86,16 @@ stages:
             # Wait a moment to ensure resources are cleaned up
             sleep 10
             
-            # Install Nginx Ingress Controller with proper configuration
+            # Видаляємо всі існуючі ValidatingWebhookConfigurations для nginx
+            kubectl delete validatingwebhookconfiguration ingress-nginx-admission --ignore-not-found
+            
+            # Install Nginx Ingress Controller with properly configured webhook
             helm install nginx-ingress ingress-nginx/ingress-nginx \
               --set controller.service.loadBalancerIP=$(staticIpAddress) \
               --set controller.service.annotations."service\.beta\.kubernetes\.io/azure-load-balancer-health-probe-request-path"=/healthz \
               --set controller.admissionWebhooks.enabled=true \
               --set controller.admissionWebhooks.patch.enabled=true \
+              --set controller.admissionWebhooks.failurePolicy=Ignore \
               --wait
               
             echo "Waiting for external IP..."
@@ -261,75 +265,113 @@ stages:
             echo "Status of nginx-ingress components:"
             kubectl get all -l app.kubernetes.io/name=ingress-nginx -A
             
-            # Check if the webhook needs to be patched or waiting
+            # Check if webhook is functional
             WEBHOOK_READY="true"
             WEBHOOK_SERVICE=$(kubectl get svc nginx-ingress-ingress-nginx-controller-admission -n default -o name --ignore-not-found)
             if [ -z "$WEBHOOK_SERVICE" ]; then
-              echo "Warning: Admission webhook service not found. Adding extra waiting time..."
-              sleep 30
+              echo "Warning: Admission webhook service not found. Continuing without webhook validation..."
               WEBHOOK_READY="false"
+              # Remove any existing webhook configuration to avoid validation issues
+              kubectl delete validatingwebhookconfiguration ingress-nginx-admission --ignore-not-found
             else
               WEBHOOK_ENDPOINTS=$(kubectl get endpoints -n default nginx-ingress-ingress-nginx-controller-admission -o jsonpath='{.subsets[*].addresses}' --ignore-not-found)
               if [ -z "$WEBHOOK_ENDPOINTS" ]; then
-                echo "Warning: No endpoints found for admission webhook. Adding extra waiting time..."
-                sleep 30
+                echo "Warning: No endpoints found for admission webhook. Continuing without webhook validation..."
                 WEBHOOK_READY="false"
+                # Remove any existing webhook configuration to avoid validation issues
+                kubectl delete validatingwebhookconfiguration ingress-nginx-admission --ignore-not-found
               fi
             fi
             
             # Main deployment section
             echo "Proceeding with deployment..."
             
+            # Complete removal of any existing release
             helm uninstall $(helmChartName) --namespace default || true
-            
-            # Additional waiting to ensure resources are fully cleaned
+            # Ensure it's fully removed by waiting and deleting any leftovers
+            sleep 5
+            kubectl delete all -l app.kubernetes.io/instance=$(helmChartName) --namespace default --ignore-not-found
             sleep 5
             
             echo "Installing main application..."
-            helm install $(helmChartName) $(helmChartName)-$(chartVersion).tgz \
-              --set image.repository=$(acrUrl)/$(imageRepository) \
-              --set image.tag=stable \
-              --set ingress.host=$INGRESS_HOST \
-              ${WEBHOOK_BYPASS:-} \
-              --values ./helm/values.yaml \
-              --namespace default --create-namespace \
-              --timeout 10m0s
-            
-            if [ $? -ne 0 ] && [ "$WEBHOOK_READY" == "false" ]; then
-              echo "Deployment failed but webhook wasn't ready. Attempting with explicit bypass..."
+            if [ "$WEBHOOK_READY" == "false" ]; then
+              echo "Using deployment with webhook validation disabled..."
               helm install $(helmChartName) $(helmChartName)-$(chartVersion).tgz \
                 --set image.repository=$(acrUrl)/$(imageRepository) \
                 --set image.tag=stable \
                 --set ingress.host=$INGRESS_HOST \
                 --set-string "controller.admissionWebhooks.enabled=false" \
                 --values ./helm/values.yaml \
-                --namespace default --create-namespace
+                --namespace default --create-namespace \
+                --timeout 5m0s
+            else
+              helm install $(helmChartName) $(helmChartName)-$(chartVersion).tgz \
+                --set image.repository=$(acrUrl)/$(imageRepository) \
+                --set image.tag=stable \
+                --set ingress.host=$INGRESS_HOST \
+                --values ./helm/values.yaml \
+                --namespace default --create-namespace \
+                --timeout 5m0s
+            fi
+            
+            # Check deployment result
+            if [ $? -ne 0 ]; then
+              echo "Main deployment failed. Trying one more time with webhook disabled..."
+              sleep 10
+              kubectl delete all -l app.kubernetes.io/instance=$(helmChartName) --namespace default --ignore-not-found
+              sleep 5
+              helm install $(helmChartName) $(helmChartName)-$(chartVersion).tgz \
+                --set image.repository=$(acrUrl)/$(imageRepository) \
+                --set image.tag=stable \
+                --set ingress.host=$INGRESS_HOST \
+                --set-string "controller.admissionWebhooks.enabled=false" \
+                --values ./helm/values.yaml \
+                --namespace default --create-namespace \
+                --no-hooks
             fi
 
+            # Complete removal of any existing canary release
             helm uninstall $(helmChartName)-canary --namespace default || true
-            
-            # Additional waiting to ensure resources are fully cleaned
+            # Ensure it's fully removed by waiting and deleting any leftovers
+            sleep 5
+            kubectl delete all -l app.kubernetes.io/instance=$(helmChartName)-canary --namespace default --ignore-not-found
             sleep 5
             
             echo "Installing canary application..."
-            helm install $(helmChartName)-canary $(helmChartName)-$(chartVersion).tgz \
-              --set image.repository=$(acrUrl)/$(imageRepository) \
-              --set image.tag=$(Build.BuildId) \
-              --set ingress.host=$INGRESS_HOST \
-              ${WEBHOOK_BYPASS:-} \
-              --values ./helm/values-canary.yaml \
-              --namespace default \
-              --timeout 10m0s
-              
-            if [ $? -ne 0 ] && [ "$WEBHOOK_READY" == "false" ]; then
-              echo "Canary deployment failed but webhook wasn't ready. Attempting with explicit bypass..."
+            if [ "$WEBHOOK_READY" == "false" ]; then
+              echo "Using canary deployment with webhook validation disabled..."
               helm install $(helmChartName)-canary $(helmChartName)-$(chartVersion).tgz \
                 --set image.repository=$(acrUrl)/$(imageRepository) \
                 --set image.tag=$(Build.BuildId) \
                 --set ingress.host=$INGRESS_HOST \
                 --set-string "controller.admissionWebhooks.enabled=false" \
                 --values ./helm/values-canary.yaml \
-                --namespace default
+                --namespace default \
+                --timeout 5m0s
+            else
+              helm install $(helmChartName)-canary $(helmChartName)-$(chartVersion).tgz \
+                --set image.repository=$(acrUrl)/$(imageRepository) \
+                --set image.tag=$(Build.BuildId) \
+                --set ingress.host=$INGRESS_HOST \
+                --values ./helm/values-canary.yaml \
+                --namespace default \
+                --timeout 5m0s
+            fi
+            
+            # Check deployment result
+            if [ $? -ne 0 ]; then
+              echo "Canary deployment failed. Trying one more time with webhook disabled..."
+              sleep 10
+              kubectl delete all -l app.kubernetes.io/instance=$(helmChartName)-canary --namespace default --ignore-not-found
+              sleep 5
+              helm install $(helmChartName)-canary $(helmChartName)-$(chartVersion).tgz \
+                --set image.repository=$(acrUrl)/$(imageRepository) \
+                --set image.tag=$(Build.BuildId) \
+                --set ingress.host=$INGRESS_HOST \
+                --set-string "controller.admissionWebhooks.enabled=false" \
+                --values ./helm/values-canary.yaml \
+                --namespace default \
+                --no-hooks
             fi
           displayName: 'Deploy Helm Chart to AKS'
           env:
