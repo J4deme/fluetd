@@ -8,7 +8,7 @@ pool:
 
 variables:
   azureSubscription: 'destrong-arm'
-  dockerRegistryServiceConnection: 'c81b072f-0a0b-4208-9f65-f39e428e6c7f'
+  dockerRegistryServiceConnection: '6862ce6f-7d49-40b0-9089-ed610706205c'
   imageRepository: 'bestrong'
   containerRegistry: 'bestrongaksacr12.azurecr.io'
   dockerfilePath: '$(Build.SourcesDirectory)/Dockerfile'
