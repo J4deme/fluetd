@@ -53,6 +53,18 @@ stages:
             inlineScript: |
               az aks get-credentials --resource-group bestrongAKS-rg --name bestrongAKS12
 
+        - task: Bash@3
+          displayName: 'Force delete leftover canary resources'
+          inputs:
+            targetType: 'inline'
+            script: |
+              kubectl delete deployment bestrongapp-canary-deploy --ignore-not-found
+              kubectl delete svc bestrongapp-canary-svc --ignore-not-found
+              kubectl delete svc bestrongapp-direct --ignore-not-found
+              kubectl delete rs -l app.kubernetes.io/name=bestrongapp --ignore-not-found
+              kubectl wait --for=delete deployment/bestrongapp-canary-deploy --timeout=60s || true
+
+        
         - task: HelmInstaller@1
           displayName: 'Install Helm'
           inputs:
