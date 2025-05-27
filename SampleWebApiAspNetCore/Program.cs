@@ -14,9 +14,6 @@ using Swashbuckle.AspNetCore.SwaggerGen;
 
 var builder = WebApplication.CreateBuilder(args);
 
-builder.Logging.ClearProviders();
-builder.Logging.AddJsonConsole();
-
 builder.Services.AddControllers()
                 .AddNewtonsoftJson(options =>
                        options.SerializerSettings.ContractResolver = new CamelCasePropertyNamesContractResolver()); 
@@ -45,8 +42,7 @@ builder.Services.AddAutoMapper(typeof(FoodMappings));
 
 var app = builder.Build();
 
-var apiVersionDescriptionProvider = app.Services.GetRequiredService<IApiVersionDescriptionProvider>();
-var loggerFactory = app.Services.GetRequiredService<ILoggerFactory>();
+// Add services to the container.
 
 // Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment())
