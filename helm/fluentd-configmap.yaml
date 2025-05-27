@@ -17,10 +17,7 @@ data:
       tag kubernetes.bestrong.*
       read_from_head true
       <parse>
-        @type json
-        time_key time
-        time_format %Y-%m-%dT%H:%M:%S.%N%z
-        keep_time_key true
+        @type none
       </parse>
     </source>
 
