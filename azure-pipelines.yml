@@ -235,7 +235,7 @@ stages:
             script: |
               set -e
               export HELM_EXPERIMENTAL_OCI=1
-              helm registry login $(containerRegistry) --username $(acrUsername) --password $(acrPassword)
+              helm registry login $(containerRegistry) --username $(acrUsername) --password-stdin $(acrPassword)
               helm pull oci://$(containerRegistry)/helm/$(helmChartName) --version $(chartVersion)
               
               INGRESS_IP=${ingressIP:-$(kubectl get svc nginx-ingress-ingress-nginx-controller -o jsonpath='{.status.loadBalancer.ingress[0].ip}')}

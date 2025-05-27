@@ -2,7 +2,7 @@ ingress:
   enabled: true
   ingressClassName: nginx
   hosts:
-    - grafana.128.251.178.137.nip.io
+    - grafana.4.210.161.192.nip.io
   path: /
   pathType: Prefix
 
@@ -43,9 +43,6 @@ persistence:
 # Плагіни для роботи з логами
 plugins:
   - grafana-piechart-panel
-
-# Додаткові налаштування
-adminPassword: "admin123"
 
 # Конфігурація для кращої роботи з Elasticsearch
 grafana.ini:
