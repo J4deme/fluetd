@@ -5,4 +5,4 @@ metadata:
   namespace: kubecost
 type: Opaque
 data:
-  auth: auth str in base64
+  auth: YWRtaW46e1NIQX1xaFZtVTBTcXNvcW11ZDNsRGVTRE92WDE4UU09
