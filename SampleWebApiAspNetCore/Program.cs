@@ -42,7 +42,8 @@ builder.Services.AddAutoMapper(typeof(FoodMappings));
 
 var app = builder.Build();
 
-// Add services to the container.
+var apiVersionDescriptionProvider = app.Services.GetRequiredService<IApiVersionDescriptionProvider>();
+var loggerFactory = app.Services.GetRequiredService<ILoggerFactory>();
 
 // Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment())

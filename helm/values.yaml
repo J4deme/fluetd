@@ -12,7 +12,7 @@ service:
 containerPort: 80
 
 ingress:
-  host: bestrong.4.210.171.228.nip.io   # Fixed format: name.IP.nip.io
+  host: bestrong.4.210.161.192.nip.io   # Fixed format: name.IP.nip.io
   canary:
     enabled: false                 # або true, якщо треба
     weight: 10
