@@ -1,0 +1,105 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: fluentd-config
+  namespace: default
+data:
+  fluent.conf: |
+    <system>
+      log_level info
+    </system>
+
+    # Збір логів з контейнерів BeStrong
+    <source>
+      @type tail
+      path /var/log/containers/*bestrongapp*.log
+      pos_file /var/log/fluentd-bestrong.log.pos
+      tag kubernetes.bestrong.*
+      read_from_head true
+      <parse>
+        @type json
+        time_key time
+        time_format %Y-%m-%dT%H:%M:%S.%N%z
+        keep_time_key true
+      </parse>
+    </source>
+
+    # Додавання Kubernetes метаданих
+    <filter kubernetes.bestrong.**>
+      @type kubernetes_metadata
+      @id filter_kube_metadata
+      kubernetes_url "https://#{ENV['KUBERNETES_SERVICE_HOST']}:#{ENV['KUBERNETES_SERVICE_PORT']}"
+      bearer_token_file /var/run/secrets/kubernetes.io/serviceaccount/token
+      ca_file /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+      verify_ssl false
+      annotation_match [".*"]
+      allow_orphans true
+      skip_labels false
+      skip_container_metadata false
+      skip_master_url false
+      skip_namespace_metadata false
+    </filter>
+
+    # Обробка та збагачення логів
+    <filter kubernetes.bestrong.**>
+      @type record_transformer
+      enable_ruby true
+      <record>
+        app_name "bestrong-api"
+        pod_name ${record.dig("kubernetes", "pod_name") || "unknown"}
+        namespace ${record.dig("kubernetes", "namespace_name") || "default"}
+        container_name ${record.dig("kubernetes", "container_name") || "unknown"}
+        node_name ${record.dig("kubernetes", "node_name") || "unknown"}
+        log_processed_at ${Time.now.strftime('%Y-%m-%dT%H:%M:%S.%3NZ')}
+        message ${record["log"] || record["message"] || ""}
+        level ${
+          log_content = record["log"] || record["message"] || ""
+          case log_content.to_s.downcase
+          when /error|exception|fail|panic/
+            "ERROR"
+          when /warn|warning/
+            "WARN"
+          when /debug/
+            "DEBUG"
+          else
+            "INFO"
+          end
+        }
+      </record>
+    </filter>
+
+    # Надсилання до Elasticsearch
+    <match kubernetes.bestrong.**>
+      @type elasticsearch
+      host elasticsearch-service.default.svc.cluster.local
+      port 9200
+      scheme http
+      index_name fluentd-bestrong-%Y.%m.%d
+      include_timestamp true
+      reload_connections false
+      reconnect_on_error true
+      reload_on_failure true
+      log_es_400_reason true
+      type_name _doc
+      
+      <buffer time>
+        @type file
+        path /var/log/fluentd-buffers/bestrong
+        timekey 1d
+        timekey_wait 10m
+        flush_mode interval
+        flush_interval 10s
+        flush_thread_count 2
+        flush_at_shutdown true
+        retry_type exponential_backoff
+        retry_max_interval 30
+        chunk_limit_size 8MB
+        queue_limit_length 32
+        overflow_action block
+      </buffer>
+    </match>
+
+    # Тестовий вивід для дебагу
+    <match debug.**>
+      @type stdout
+    </match>

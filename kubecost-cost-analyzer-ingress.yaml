@@ -14,10 +14,11 @@ metadata:
     nginx.ingress.kubernetes.io/auth-secret: kubecost-basic-auth
     nginx.ingress.kubernetes.io/auth-realm: "Authentication Required"
     nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    cert-manager.io/cluster-issuer: "selfsigned-cluster-issuer"
 spec:
   ingressClassName: nginx
   rules:
-  - host: kubecost.128.251.178.137.nip.io
+  - host: kubecost.4.210.161.192.nip.io
     http:
       paths:
       - path: /
@@ -29,5 +30,5 @@ spec:
               name: tcp-frontend
   tls:
   - hosts:
-    - kubecost.128.251.178.137.nip.io
+    - kubecost.4.210.161.192.nip.io
     secretName: kubecost-tls

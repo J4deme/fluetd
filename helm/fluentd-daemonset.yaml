@@ -19,24 +19,33 @@ spec:
       tolerations:
       - key: node-role.kubernetes.io/master
         effect: NoSchedule
+      - key: node-role.kubernetes.io/control-plane
+        effect: NoSchedule
       containers:
       - name: fluentd
-        image: fluent/fluentd-kubernetes-daemonset:v1.14-debian-elasticsearch7-1
+        image: fluent/fluentd-kubernetes-daemonset:v1.16-debian-elasticsearch7-1
         env:
           - name: FLUENT_ELASTICSEARCH_HOST
-            value: "elasticsearch-master"
+            value: "elasticsearch-service.default.svc.cluster.local"
           - name: FLUENT_ELASTICSEARCH_PORT
             value: "9200"
           - name: FLUENT_ELASTICSEARCH_SCHEME
             value: "http"
-          - name: FLUENT_UID
-            value: "0"
+          - name: FLUENTD_SYSTEMD_CONF
+            value: "disable"
+          - name: KUBERNETES_VERIFY_SSL
+            value: "false"
+          - name: K8S_NODE_NAME
+            valueFrom:
+              fieldRef:
+                fieldPath: spec.nodeName
         resources:
           limits:
             memory: 512Mi
+            cpu: 200m
           requests:
-            cpu: 100m
             memory: 200Mi
+            cpu: 100m
         volumeMounts:
         - name: varlog
           mountPath: /var/log
@@ -46,6 +55,9 @@ spec:
         - name: fluentd-config
           mountPath: /fluentd/etc/fluent.conf
           subPath: fluent.conf
+          readOnly: true
+        - name: fluentd-buffer
+          mountPath: /var/log/fluentd-buffers
       terminationGracePeriodSeconds: 30
       volumes:
       - name: varlog
@@ -56,4 +68,6 @@ spec:
           path: /var/lib/docker/containers
       - name: fluentd-config
         configMap:
-          name: fluentd-config 
+          name: fluentd-config
+      - name: fluentd-buffer
+        emptyDir: {}

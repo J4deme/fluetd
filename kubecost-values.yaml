@@ -8,12 +8,16 @@ ingress:
   className: nginx
   annotations:
     nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    cert-manager.io/cluster-issuer: "selfsigned-cluster-issuer"
+    nginx.ingress.kubernetes.io/auth-type: basic
+    nginx.ingress.kubernetes.io/auth-secret: kubecost-basic-auth
+    nginx.ingress.kubernetes.io/auth-realm: "Authentication Required"
   hosts:
-    - kubecost.128.251.178.137.nip.io
+    - kubecost.4.210.161.192.nip.io
   tls:
     - secretName: kubecost-tls
       hosts:
-        - kubecost.128.251.178.137.nip.io
+        - kubecost.4.210.161.192.nip.io
 
 networkCosts:
   enabled: true

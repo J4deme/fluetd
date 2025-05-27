@@ -14,7 +14,8 @@ using Swashbuckle.AspNetCore.SwaggerGen;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Add services to the container.
+builder.Logging.ClearProviders();
+builder.Logging.AddJsonConsole();
 
 builder.Services.AddControllers()
                 .AddNewtonsoftJson(options =>

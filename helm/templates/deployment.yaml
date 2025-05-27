@@ -15,11 +15,53 @@ spec:
       labels:
         app: {{ include "bestrongapp.fullname" . }}
         tier: {{ .Values.labels.tier }}
+        # Додаємо мітки для кращої ідентифікації в логах
+        component: api
+        version: {{ .Values.image.tag | quote }}
+      annotations:
+        # Дозволяємо Fluentd збирати логи з цього поду
+        fluentd.org/exclude: "false"
+        # Додаткові анотації для логування
+        logging.coreos.com/enabled: "true"
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "{{ .Values.containerPort }}"
     spec:
       containers:
         - name: {{ .Chart.Name }}
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - name: ASPNETCORE_ENVIRONMENT
+              value: Development
+            # Додаємо змінні для структурованого логування
+            - name: ASPNETCORE_URLS
+              value: "http://+:{{ .Values.containerPort }}"
+            - name: Logging__LogLevel__Default
+              value: "Information"
+            - name: Logging__LogLevel__Microsoft
+              value: "Warning"
+            - name: Logging__LogLevel__System
+              value: "Warning"
+            # Налаштування для JSON логування (якщо підтримується вашим додатком)
+            - name: Logging__Console__FormatterName
+              value: "json"
+            # Метадані для логів
+            - name: APP_NAME
+              value: "bestrong-api"
+            - name: APP_VERSION
+              value: {{ .Values.image.tag | quote }}
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
           resources:
             limits:
               memory: {{ .Values.resources.limits.memory }}
@@ -29,4 +71,37 @@ spec:
               cpu: {{ .Values.resources.requests.cpu }}
           ports:
             - containerPort: {{ .Values.containerPort }}
-
+              name: http
+              protocol: TCP
+          # Додаємо health checks для кращого моніторингу
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          # Додаємо volume mounts для логів (опціонально)
+          volumeMounts:
+            - name: app-logs
+              mountPath: /app/logs
+            - name: tmp
+              mountPath: /tmp
+      # Додаємо volumes
+      volumes:
+        - name: app-logs
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+      # Налаштування для кращої стабільності
+      restartPolicy: Always
+      terminationGracePeriodSeconds: 30

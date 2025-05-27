@@ -264,3 +264,16 @@ stages:
                 --namespace default --create-namespace \
                 --wait \
                 --timeout 5m0s
+
+        - task: Bash@3
+          displayName: 'Patch Ingress for Grafana'
+          inputs:
+            targetType: 'inline'
+            script: |
+              kubectl patch ingress grafana -n default --type=json -p='[
+                {
+                  "op": "replace",
+                  "path": "/spec/rules/0/host",
+                  "value": "grafana.4.210.161.192.nip.io"
+                }
+              ]'
