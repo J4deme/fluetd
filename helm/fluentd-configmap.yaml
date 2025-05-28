@@ -25,7 +25,7 @@ data:
     <filter kubernetes.bestrong.**>
       @type kubernetes_metadata
       @id filter_kube_metadata
-      kubernetes_url "https://#{ENV['KUBERNETES_SERVICE_HOST']}:#{ENV['KUBERNETES_SERVICE_PORT']}"
+      kubernetes_url https://10.0.0.1:443
       bearer_token_file /var/run/secrets/kubernetes.io/serviceaccount/token
       ca_file /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
       verify_ssl false
@@ -42,26 +42,14 @@ data:
       @type record_transformer
       enable_ruby true
       <record>
-        app_name "bestrong-api"
+        app_name bestrong-api
         pod_name ${record.dig("kubernetes", "pod_name") || "unknown"}
         namespace ${record.dig("kubernetes", "namespace_name") || "default"}
         container_name ${record.dig("kubernetes", "container_name") || "unknown"}
         node_name ${record.dig("kubernetes", "node_name") || "unknown"}
         log_processed_at ${Time.now.strftime('%Y-%m-%dT%H:%M:%S.%3NZ')}
         message ${record["log"] || record["message"] || ""}
-        level ${
-          log_content = record["log"] || record["message"] || ""
-          case log_content.to_s.downcase
-          when /error|exception|fail|panic/
-            "ERROR"
-          when /warn|warning/
-            "WARN"
-          when /debug/
-            "DEBUG"
-          else
-            "INFO"
-          end
-        }
+        level INFO
       </record>
     </filter>
 
