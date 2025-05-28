@@ -42,6 +42,8 @@ builder.Services.AddDbContext<FoodDbContext>(opt =>
 
 builder.Services.AddAutoMapper(typeof(FoodMappings));
 
+builder.Services.AddHealthChecks();
+
 var app = builder.Build();
 
 var apiVersionDescriptionProvider = app.Services.GetRequiredService<IApiVersionDescriptionProvider>();
@@ -75,5 +77,8 @@ app.UseHttpsRedirection();
 app.UseAuthorization();
 
 app.MapControllers();
+
+app.MapHealthChecks("/health");
+app.MapHealthChecks("/health/ready");
 
 app.Run();

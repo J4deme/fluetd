@@ -207,12 +207,6 @@ stages:
           inputs:
             helmVersionToInstall: 'latest'
 
-        # Діагностика: показати актуальні deployment.yaml та values.yaml
-        - script: cat helm/templates/deployment.yaml
-          displayName: 'Show deployment.yaml'
-        - script: cat helm/values.yaml
-          displayName: 'Show values.yaml'
-
         - task: Bash@3
           displayName: 'Deploy Helm Chart from local folder to AKS'
           inputs:
