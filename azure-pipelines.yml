@@ -7,12 +7,12 @@ resources:
 - repo: self
 
 variables:
-  dockerRegistryServiceConnection: '6862ce6f-7d49-40b0-9089-ed610706205c'
+  dockerRegistryServiceConnection: 'bestrongAKS1acr1'
   imageRepository: 'bestrong'
-  containerRegistry: 'bestrongaksacr12.azurecr.io'
+  containerRegistry: 'bestrongaks1acr1.azurecr.io'
   dockerfilePath: '$(Build.SourcesDirectory)/Dockerfile'
   tag: '$(Build.BuildId)'
-  azureSubscription: 'destrong-arm'
+  azureSubscription: 'bestrong-arm'
 
 stages:
 # ===== BUILD =====
@@ -51,7 +51,7 @@ stages:
             scriptType: 'bash'
             scriptLocation: 'inlineScript'
             inlineScript: |
-              az aks get-credentials --resource-group bestrongAKS-rg --name bestrongAKS12
+              az aks get-credentials --resource-group bestrongAKS1-rg --name bestrongAKS1
 
         - task: Bash@3
           displayName: 'Force delete leftover canary resources'
@@ -86,14 +86,14 @@ stages:
             scriptLocation: 'inlineScript'
             inlineScript: |
               az network public-ip create \
-                --resource-group "MC_bestrongAKS-rg_bestrongAKS12_westeurope" \
+                --resource-group "MC_bestrongAKS1-rg_bestrongAKS1_westeurope" \
                 --name bestrong-ingress-ip \
                 --sku Standard \
                 --allocation-method static \
                 --location westeurope
 
               IP_ADDRESS=$(az network public-ip show \
-                --resource-group "MC_bestrongAKS-rg_bestrongAKS12_westeurope" \
+                --resource-group "MC_bestrongAKS1-rg_bestrongAKS1_westeurope" \
                 --name bestrong-ingress-ip \
                 --query ipAddress -o tsv)
               echo "##vso[task.setvariable variable=staticIpAddress]$IP_ADDRESS"
@@ -200,7 +200,7 @@ stages:
             scriptType: 'bash'
             scriptLocation: 'inlineScript'
             inlineScript: |
-              az aks get-credentials --resource-group bestrongAKS-rg --name bestrongAKS12
+              az aks get-credentials --resource-group bestrongAKS1-rg --name bestrongAKS1
 
         - task: HelmInstaller@1
           displayName: 'Install Helm'
@@ -261,6 +261,18 @@ stages:
                 --set image.tag=$(tag) \
                 --set ingress.host=$INGRESS_HOST \
                 --values updated-values.yaml \
-                --namespace default --create-namespace \
-                --wait \
-                --timeout 5m0s
+                --namespace default --create-namespace 
+
+
+        - task: Bash@3
+          displayName: 'Patch Ingress for Grafana'
+          inputs:
+            targetType: 'inline'
+            script: |
+              kubectl patch ingress grafana -n default --type=json -p='[
+                {
+                  "op": "replace",
+                  "path": "/spec/rules/0/host",
+                  "value": "grafana.128.251.237.157.nip.io"
+                }
+              ]'
