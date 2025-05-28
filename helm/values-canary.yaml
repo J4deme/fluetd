@@ -28,3 +28,7 @@ resources:
 labels:
   app: webapp
   tier: backend
+
+env:
+  - name: ASPNETCORE_ENVIRONMENT
+    value: Development
