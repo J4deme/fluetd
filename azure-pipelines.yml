@@ -207,63 +207,28 @@ stages:
           inputs:
             helmVersionToInstall: 'latest'
 
-        - task: Bash@3
-          displayName: 'Package Helm Chart'
-          inputs:
-            targetType: 'inline'
-            script: |
-              helm package helm/ --version $(chartVersion)
+        # Діагностика: показати актуальні deployment.yaml та values.yaml
+        - script: cat helm/templates/deployment.yaml
+          displayName: 'Show deployment.yaml'
+        - script: cat helm/values.yaml
+          displayName: 'Show values.yaml'
 
         - task: Bash@3
-          displayName: 'Login to ACR and Push Helm Chart'
-          inputs:
-            targetType: 'inline'
-            script: |
-              export HELM_EXPERIMENTAL_OCI=1
-              helm registry login $(containerRegistry) \
-                --username $(acrUsername) \
-                --password $(acrPassword)
-              helm push $(helmChartName)-$(chartVersion).tgz oci://$(containerRegistry)/helm
-          env:
-            acrUsername: $(acrUsername)
-            acrPassword: $(acrPassword)
-
-        - task: Bash@3
-          displayName: 'Deploy Helm Chart from ACR to AKS'
+          displayName: 'Deploy Helm Chart from local folder to AKS'
           inputs:
             targetType: 'inline'
             script: |
               set -e
-              export HELM_EXPERIMENTAL_OCI=1
-              helm registry login $(containerRegistry) --username $(acrUsername) --password-stdin $(acrPassword)
-              helm pull oci://$(containerRegistry)/helm/$(helmChartName) --version $(chartVersion)
-              
               INGRESS_IP=${ingressIP:-$(kubectl get svc nginx-ingress-ingress-nginx-controller -o jsonpath='{.status.loadBalancer.ingress[0].ip}')}
               INGRESS_HOST="bestrong.$INGRESS_IP.nip.io"
-              
               cat helm/values.yaml > updated-values.yaml
               sed -i "s|host:.*|host: $INGRESS_HOST|g" updated-values.yaml
-              
-              # If release exists, uninstall and wait for cleanup
-              if helm status $(helmChartName) --namespace default > /dev/null 2>&1; then
-                echo "Helm release exists, uninstalling..."
-                helm uninstall $(helmChartName) --namespace default
-                echo "Waiting for all resources to terminate..."
-                sleep 10
-                while kubectl get all -n default | grep $(helmChartName); do
-                  echo "Waiting for resources to terminate..."
-                  sleep 5
-                done
-              fi
-              
-              helm install $(helmChartName) $(helmChartName)-$(chartVersion).tgz \
+              helm upgrade $(helmChartName) ./helm \
                 --set image.repository=$(containerRegistry)/$(imageRepository) \
                 --set image.tag=$(tag) \
                 --set ingress.host=$INGRESS_HOST \
                 --values updated-values.yaml \
-                --namespace default --create-namespace \
-                --wait \
-                --timeout 5m0s
+                --namespace default --install --wait --timeout 5m0s
 
         - task: Bash@3
           displayName: 'Patch Ingress for Grafana'
