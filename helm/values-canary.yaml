@@ -48,7 +48,7 @@ env:
   - name: APP_NAME
     value: "bestrong-api"
   - name: APP_VERSION
-    value: {{ .Values.image.tag | quote }}
+    value: stable
   - name: POD_NAME
     valueFrom:
       fieldRef:
